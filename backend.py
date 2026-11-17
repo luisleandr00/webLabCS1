@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parent
 MODEL_DIR = ROOT / "final_models"
 os.environ.setdefault("KERAS_HOME", str(ROOT / ".cache" / "keras"))
 PET_MODEL_PATH = os.environ.get(
-    "CSILAB_PET_MODEL", str(MODEL_DIR / "best_EfficientNetB0.keras")
+    "CSILAB_PET_MODEL", str(MODEL_DIR / "best_DenseNet121.keras")
 )
 PET_POSITIVE_CLASS = os.environ.get("CSILAB_PET_POSITIVE_CLASS", "Perro").capitalize()
 MAX_REQUEST_BYTES = 14 * 1024 * 1024
@@ -156,7 +156,7 @@ def predict_pets_local(image_base64):
     model = get_pet_model()
     height, width = int(model.input_shape[1]), int(model.input_shape[2])
     resized = image.convert("RGB").resize((width, height))
-    batch = np.asarray(resized, dtype=np.float32)[np.newaxis, ...]
+    batch = np.asarray(resized, dtype=np.float32)[np.newaxis, ...] / 255.0
     prediction = np.asarray(model.predict(batch, verbose=0)).reshape(-1)
     if prediction.size == 1:
         positive_probability = float(np.clip(prediction[0], 0, 1))

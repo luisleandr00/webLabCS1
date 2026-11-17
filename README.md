@@ -36,4 +36,4 @@ La interfaz reenvía `/api/predict` a la API local en el puerto 3001. El backend
 
 La API CS1 desplegada carga los modelos actuales desde Azure Blob Storage. Sus respuestas de mascotas en porcentajes y de MNIST con `digit` y `confidence` se convierten al formato que ya presenta la interfaz.
 
-Si falta la clave o el servicio no está disponible, se usan los modelos locales de `final_models/`. Para perros y gatos, el modelo local por defecto es `best_EfficientNetB0.keras`; si su clase positiva está invertida, configura `CSILAB_PET_POSITIVE_CLASS=Gato`.
+Si falta la clave o el servicio no está disponible, se usan los modelos locales de `final_models/`. Para perros y gatos, el respaldo usa el checkpoint disponible `best_DenseNet121.keras` con imágenes RGB de 180×180 normalizadas a 0–1, en línea con el notebook. El notebook reporta 98,14% de exactitud de prueba para su DenseNet121, pero no incluye su checkpoint `.keras`; por eso el archivo local es el checkpoint anterior del proyecto. La clase positiva es **Perro**; si las etiquetas del modelo que uses están invertidas, configura `CSILAB_PET_POSITIVE_CLASS=Gato`.
