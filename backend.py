@@ -19,7 +19,8 @@ PET_MODEL_PATH = os.environ.get(
     "CSILAB_PET_MODEL", str(MODEL_DIR / "best_EfficientNetB0.keras")
 )
 PET_POSITIVE_CLASS = os.environ.get("CSILAB_PET_POSITIVE_CLASS", "Perro").capitalize()
-MAX_REQUEST_BYTES = 12 * 1024 * 1024
+MAX_REQUEST_BYTES = 14 * 1024 * 1024
+MAX_IMAGE_BYTES = 10 * 1024 * 1024
 _models = {}
 _model_lock = threading.Lock()
 
@@ -40,18 +41,60 @@ def load_local_env():
                 os.environ.setdefault(name, value)
 
 
-def decode_image(image_base64):
+def image_bytes(image_base64):
     if "," in image_base64:
         image_base64 = image_base64.split(",", 1)[1]
     raw = base64.b64decode(image_base64, validate=True)
-    if len(raw) > 10 * 1024 * 1024:
+    if len(raw) > MAX_IMAGE_BYTES:
         raise ValueError("La imagen supera el límite de 10 MB.")
+    return raw
+
+
+def decode_image(image_base64):
     from io import BytesIO
     from PIL import Image, ImageOps
 
-    with Image.open(BytesIO(raw)) as image:
+    with Image.open(BytesIO(image_bytes(image_base64))) as image:
         image.load()
         return ImageOps.exif_transpose(image).copy()
+
+
+def post_backend_prediction(route, image_base64):
+    load_local_env()
+    api_key = os.environ.get("CS1_API_LAB_1", "").strip()
+    if not api_key or api_key.startswith("<"):
+        raise RuntimeError("Falta configurar CS1_API_LAB_1 en .env.local.")
+
+    raw = image_bytes(image_base64)
+    boundary = "----CSILabBoundary" + os.urandom(12).hex()
+    body = (
+        f"--{boundary}\r\n"
+        'Content-Disposition: form-data; name="image"; filename="input.png"\r\n'
+        "Content-Type: application/octet-stream\r\n\r\n"
+    ).encode("ascii") + raw + f"\r\n--{boundary}--\r\n".encode("ascii")
+    base_url = os.environ.get(
+        "CS1_API_BASE_URL", "https://cs1-lab1.mexicocentral.cloudapp.azure.com"
+    ).rstrip("/")
+    request = Request(
+        f"{base_url}/{route}",
+        data=body,
+        headers={
+            "Content-Type": f"multipart/form-data; boundary={boundary}",
+            "Accept": "application/json",
+            "x-api-key": api_key,
+        },
+        method="POST",
+    )
+    try:
+        with urlopen(request, timeout=45) as response:
+            data = json.loads(response.read().decode("utf-8-sig"))
+    except HTTPError as error:
+        raise RuntimeError(f"La API CS1 respondió con HTTP {error.code}.") from None
+    except (URLError, TimeoutError, json.JSONDecodeError):
+        raise RuntimeError("No se pudo conectar con la API CS1.") from None
+    if not isinstance(data, dict) or data.get("error"):
+        raise RuntimeError("La API CS1 devolvió un error de predicción.")
+    return data
 
 
 def get_pet_model():
@@ -60,7 +103,7 @@ def get_pet_model():
             if "pets" not in _models:
                 import tensorflow as tf
 
-                path = Path(PET_MODEL_PATH)
+                path = Path(os.environ.get("CSILAB_PET_MODEL", str(PET_MODEL_PATH)))
                 if not path.is_absolute():
                     path = ROOT / path
                 if not path.is_file():
@@ -106,7 +149,7 @@ def get_mnist_model():
     return _models["mnist"]
 
 
-def predict_pets(image_base64):
+def predict_pets_local(image_base64):
     import numpy as np
 
     image = decode_image(image_base64)
@@ -117,7 +160,7 @@ def predict_pets(image_base64):
     prediction = np.asarray(model.predict(batch, verbose=0)).reshape(-1)
     if prediction.size == 1:
         positive_probability = float(np.clip(prediction[0], 0, 1))
-        positive = PET_POSITIVE_CLASS
+        positive = os.environ.get("CSILAB_PET_POSITIVE_CLASS", PET_POSITIVE_CLASS).capitalize()
         negative = "Gato" if positive == "Perro" else "Perro"
         probabilities = {positive: positive_probability, negative: 1 - positive_probability}
     elif prediction.size == 2:
@@ -132,84 +175,33 @@ def predict_pets(image_base64):
     }
 
 
-def normalize_mnist_response(data):
-    """Map common Azure classifier responses to the shape already used by the UI."""
-    if isinstance(data, (int, float)):
-        return {"digito": int(data), "confianza": 1.0}
-    if isinstance(data, list):
-        values = data
-        if len(values) == 1 and isinstance(values[0], list):
-            values = values[0]
-        if len(values) == 1 and isinstance(values[0], dict):
-            return normalize_mnist_response(values[0])
-        if len(values) == 10 and all(isinstance(v, (int, float)) for v in values):
-            digit = max(range(10), key=values.__getitem__)
-            return {"digito": digit, "confianza": float(values[digit])}
-        if len(values) == 1 and isinstance(values[0], (int, float)):
-            return {"digito": int(values[0]), "confianza": 1.0}
-        raise ValueError("La API MNIST devolvió un formato desconocido.")
+def predict_pets_remote(image_base64):
+    data = post_backend_prediction("catsdogs", image_base64)
+    cat_percent = float(data["cat_percent"])
+    dog_percent = float(data["dog_percent"])
+    return {
+        "predicciones": [
+            {"clase": "Gato", "probabilidad": min(1.0, max(0.0, cat_percent / 100))},
+            {"clase": "Perro", "probabilidad": min(1.0, max(0.0, dog_percent / 100))},
+        ]
+    }
 
-    if not isinstance(data, dict):
-        raise ValueError("La API MNIST devolvió un formato desconocido.")
-    nested = data.get("result") or data.get("prediction")
-    if isinstance(nested, dict):
-        data = {**data, **nested}
-    elif isinstance(nested, list):
-        return normalize_mnist_response(nested)
-    elif isinstance(nested, (int, float)):
-        data = {**data, "digito": nested}
 
-    digit = next(
-        (data[k] for k in ("digito", "digit", "predicted_digit", "class", "label") if k in data),
-        None,
-    )
-    probabilities = data.get("probabilidades") or data.get("probabilities") or data.get("scores")
-    if digit is None and isinstance(probabilities, list) and len(probabilities) == 10:
-        digit = max(range(10), key=probabilities.__getitem__)
-    if digit is None:
-        raise ValueError("La API MNIST no devolvió el número detectado.")
-
-    confidence = next(
-        (data[k] for k in ("confianza", "confidence", "probability", "score") if k in data),
-        None,
-    )
-    if confidence is None and isinstance(probabilities, list) and len(probabilities) == 10:
-        confidence = probabilities[int(digit)]
-    confidence = float(confidence if confidence is not None else 1)
-    if confidence > 1:
-        confidence /= 100
-    return {"digito": int(digit), "confianza": min(1.0, max(0.0, confidence))}
+def predict_pets(image_base64):
+    try:
+        return predict_pets_remote(image_base64)
+    except (HTTPError, RuntimeError, URLError, ValueError, KeyError) as error:
+        print(f"API CS1 de mascotas no disponible ({error}); se usará el modelo local.", flush=True)
+        return predict_pets_local(image_base64)
 
 
 def predict_digit_remote(image_base64):
-    api_url = os.environ.get("MNIST_API_URL")
-    if not api_url:
-        raise RuntimeError("Falta configurar MNIST_API_URL en .env.local.")
-    if len(image_base64) > MAX_REQUEST_BYTES:
-        raise ValueError("La imagen supera el límite permitido.")
-    payload = json.dumps(
-        {
-            "imageBase64": image_base64,
-            "image": image_base64,
-            "imageDataUrl": f"data:image/png;base64,{image_base64}",
-            "modelo": "mnist",
-        }
-    ).encode("utf-8")
-    request = Request(
-        api_url,
-        data=payload,
-        headers={"Content-Type": "application/json", "Accept": "application/json"},
-        method="POST",
-    )
-    try:
-        with urlopen(request, timeout=20) as response:
-            response_data = json.loads(response.read().decode("utf-8-sig"))
-    except HTTPError as error:
-        # Exception text can include the function key URL; keep it out of logs and UI.
-        raise RuntimeError(f"La API MNIST respondió con HTTP {error.code}.") from None
-    except (URLError, TimeoutError, json.JSONDecodeError):
-        raise RuntimeError("No se pudo conectar con la API MNIST.") from None
-    return normalize_mnist_response(response_data)
+    data = post_backend_prediction("mnist", image_base64)
+    digit = int(data["digit"])
+    confidence = float(data["confidence"])
+    if confidence > 1:
+        confidence /= 100
+    return {"digito": digit, "confianza": min(1.0, max(0.0, confidence))}
 
 
 def predict_digit_local(image_base64):

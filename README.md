@@ -4,35 +4,36 @@ Aplicación web en React para clasificar imágenes de perros y gatos y reconocer
 
 ## Inicio en Windows
 
-Necesitas Node.js y Python 3.12 de 64 bits. TensorFlow 2.20 usa Python 3.12 para cargar los modelos de animales.
+Necesitas Node.js y Python 3.12 de 64 bits. TensorFlow 2.20 usa Python 3.12 para cargar los modelos locales.
 
-1. Configura \`MNIST_API_URL\` en \`.env.local\` con la URL de tu función de Azure:
+1. Crea `.env.local` en la raíz del proyecto y configura la API CS1:
 
-   \`\`\`env
-   MNIST_API_URL=https://<tu-funcion>.azurewebsites.net/mnist?code=<tu-clave>
-   \`\`\`
+   ```env
+   CS1_API_BASE_URL=https://cs1-lab1.mexicocentral.cloudapp.azure.com
+   CS1_API_LAB_1=<clave-del-backend>
+   ```
 
-   \`.env.local\` está excluido de Git para que la clave no se publique. El backend llama Azure desde el servidor local y adapta la respuesta a la interfaz.
+   La clave es privada y `.env.local` está excluido de Git.
 
-2. Instala las dependencias con Python 3.12:
+2. Instala las dependencias de Python 3.12:
 
-   \`\`\`powershell
+   ```powershell
    py -3.12 -m pip install -r requirements.txt
-   \`\`\`
+   ```
 
-   Si el lanzador \`py\` no detecta esa versión, usa la ruta de \`python.exe\` de Python 3.12 para ejecutar \`-m pip install -r requirements.txt\`.
+   Si `py` no detecta Python 3.12, ejecuta `-m pip install -r requirements.txt` con la ruta de ese `python.exe`.
 
-3. Inicia la API y la interfaz en terminales separadas:
+3. Inicia la API local y la interfaz en terminales separadas:
 
-   \`\`\`powershell
+   ```powershell
    npm run api
    npm run dev
-   \`\`\`
+   ```
 
-   La interfaz reenvía \`/api/predict\` a la API local en el puerto 3001. El comando de la API selecciona Python 3.12 automáticamente cuando está instalado.
+La interfaz reenvía `/api/predict` a la API local en el puerto 3001. El backend reenvía las imágenes como `multipart/form-data` a `/mnist` o `/catsdogs` y adapta la respuesta para la interfaz.
 
 ## Modelos
 
-Los cuatro modelos \`.keras\` están en \`final_models/\` y se suben mediante Git LFS. La clasificación de animales usa \`best_EfficientNetB0.keras\` por defecto. La salida binaria asume que la clase positiva es **Perro**; puedes cambiarla con \`CSILAB_PET_POSITIVE_CLASS=Gato\` si las etiquetas de entrenamiento están invertidas.
+La API CS1 desplegada carga los modelos actuales desde Azure Blob Storage. Sus respuestas de mascotas en porcentajes y de MNIST con `digit` y `confidence` se convierten al formato que ya presenta la interfaz.
 
-El ZIP original no incluía un modelo MNIST. El backend intenta primero el endpoint de Azure y normaliza su respuesta. Si Azure rechaza la solicitud o no está disponible, usa \`final_models/mnist_cnn.keras\`, entrenado con el conjunto MNIST oficial.
+Si falta la clave o el servicio no está disponible, se usan los modelos locales de `final_models/`. Para perros y gatos, el modelo local por defecto es `best_EfficientNetB0.keras`; si su clase positiva está invertida, configura `CSILAB_PET_POSITIVE_CLASS=Gato`.
